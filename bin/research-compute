@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Internal agent tool. Humans keep using their normal coding-agent CLI."""
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from research_runtime.cli import main
+
+main()

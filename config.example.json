@@ -1,0 +1,24 @@
+{
+  "provider": {
+    "kind": "fake",
+    "fake_state": "/var/lib/research-compute/fake-provider.json"
+  },
+  "limits": {
+    "budget_usd": 20,
+    "max_gpus": 2,
+    "max_pods": 2,
+    "max_hourly_usd": 5,
+    "max_retained_gb": 100,
+    "max_volume_gb": 50,
+    "allowed_gpu_types": ["NVIDIA A40"],
+    "allowed_images": ["research/fake:local"],
+    "allowed_templates": []
+  },
+  "safety": {
+    "poll_seconds": 15,
+    "shutdown_margin_seconds": 120,
+    "max_lease_seconds": 1800,
+    "checkpoint_grace_seconds": 30,
+    "idle_grace_seconds": 120
+  }
+}

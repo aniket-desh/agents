@@ -1,0 +1,28 @@
+[Unit]
+Description=Independent research compute lease watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=research-compute
+Group=research-compute-clients
+SupplementaryGroups=research-compute
+WorkingDirectory=/var/lib/research-compute
+Environment=HOME=/var/lib/research-compute
+Environment=npm_config_cache=/var/lib/research-compute/.npm
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/research-agents/bin/research-compute watchdog --config /etc/research-compute/config.json --state-dir /var/lib/research-compute
+Restart=always
+RestartSec=5
+StateDirectory=research-compute
+StateDirectoryMode=0700
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/research-compute
+
+[Install]
+WantedBy=multi-user.target

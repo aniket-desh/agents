@@ -1,13 +1,14 @@
 # SPEC — <experiment name>
 
-Drop a copy of this as `SPEC.md` in a peer's worktree (or the project root) to
-turn on the goal loop. `/goal` and the `judge.sh` Stop hook both read it, so the
-agent can't stop until every acceptance criterion below is objectively met. This
-file is the single most valuable thing you write — it's where your taste goes.
+Optional template for the legacy team workflow. The new installer does not
+activate its goal/judge hooks. A research question can end with a negative or
+inconclusive result, an exhausted budget, or a need for human input; record that
+outcome and stop. Completion must never require obtaining a positive result.
 
 ## Goal
 
-<One or two sentences: what are you trying to show, and why does it matter?>
+<One or two sentences: what question are you testing, and what evidence would
+distinguish the hypotheses?>
 
 ## Approach / scope
 
@@ -15,13 +16,21 @@ file is the single most valuable thing you write — it's where your taste goes.
 should explore. Keep it lean — give direction and a way to fetch detail, not a
 wall of context.>
 
-## Acceptance criteria (must ALL be objectively checkable)
+## Evidence and completion criteria
 
-- [ ] <e.g. `pytest tests/fra/ -q` exits 0>
+- [ ] <e.g. the tiny exact reference agrees with the implementation>
 - [ ] <e.g. steering metric on layers 0–31 logged to reports/<name>.md>
-- [ ] <e.g. mean Δ-metric vs the `main` baseline is > 0 on the held-out split>
+- [ ] <e.g. report mean Δ-metric versus the pinned baseline on the held-out split,
+  including negative results and uncertainty>
 - [ ] <e.g. a plot saved to logs/ showing X>
-- [ ] thermonuclear-review applied to the diff; no unresolved defects
+- [ ] <record answered, negative, inconclusive, budget/deadline reached, or blocked;
+  distinguish completed checks from checks that were not run>
+
+## Spending and stopping
+
+<Approved cumulative budget, optional review point, deadline, hardware limits,
+and useful early-stopping conditions. Stop and retain GPU pods when finished or
+blocked. The legacy hooks alone do not mechanically enforce these limits.>
 
 ## How to verify
 
