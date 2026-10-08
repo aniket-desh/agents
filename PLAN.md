@@ -18,6 +18,9 @@ and budget/deadline outcomes are valid. Routine edits don't require a planning
 document, test scaffold, fixed verifier pipeline, or production architecture.
 Project-specific scientific conventions retain precedence.
 
+The shared skills cover scientific implementation (`research-code`), compute
+workflows (`gpu-research`), and technical prose (`technical-writing`).
+
 ## Implemented structure
 
 ```text
@@ -40,7 +43,7 @@ commands; unprivileged collectors launch those commands on workers.
 
 | Area | Implemented behavior |
 |---|---|
-| User installation | Managed instruction blocks, two skills, native adapters, preserved settings, backups, owned-file conflict checks |
+| User installation | Managed instruction blocks, `research-code`, `gpu-research`, and `technical-writing` skills, native adapters, preserved settings, backups, owned-file conflict checks |
 | Agent workspace | Nonroot Docker image, private home/code volumes, read-only root, no personal-home/SSH-agent/Docker-socket mounts; permission-free Codex/Claude defaults inside the image only |
 | Protected deployment | Dedicated non-login service identity, private key/ledger, group-controlled socket, root-owned runtime, two systemd services |
 | Admission | Transactional reservations across investigations, GPU/pod/rate/image/storage limits, finite leases, healthy-watchdog requirement |

@@ -46,27 +46,35 @@ class InstallTests(unittest.TestCase):
         return installer.install(self.source, self.home, ["codex", "claude", "pi"])
 
     def test_update_preserves_personal_instructions_and_command_works(self):
-        instructions = self.home / ".codex/AGENTS.md"
-        instructions.parent.mkdir(parents=True)
-        personal = "# Personal conventions\nPreserve my exact words.\n"
-        instructions.write_text(personal)
+        documents = [self.home / document for document, _ in installer.AGENTS.values()]
+        personal = "# Personal writing conventions\nPreserve my exact words.\n"
+        for instructions in documents:
+            instructions.parent.mkdir(parents=True)
+            instructions.write_text(personal)
         self.install()
-        first = instructions.read_text()
-        self.assertTrue(first.startswith(personal))
-        self.assertEqual([path.read_text() for path in instructions.parent.glob("*.bak.*")], [personal])
+        first = {instructions: instructions.read_text() for instructions in documents}
+        for document, skills in installer.AGENTS.values():
+            instructions = self.home / document
+            self.assertTrue(first[instructions].startswith(personal))
+            self.assertEqual([path.read_text() for path in instructions.parent.glob("*.bak.*")], [personal])
+            skill = self.home / skills / "technical-writing/SKILL.md"
+            self.assertEqual(skill.read_bytes(), (self.source / "skills/technical-writing/SKILL.md").read_bytes())
+            self.assertIn(str(skill), first[instructions])
         result = subprocess.run([str(self.home / ".local/bin/research-compute")], check=True, capture_output=True, text=True)
         self.assertEqual(result.stdout.strip(), "installed runtime")
         before = sorted(str(path) for path in self.home.rglob("*"))
         self.install()
-        self.assertEqual(instructions.read_text(), first)
+        self.assertEqual({instructions: instructions.read_text() for instructions in documents}, first)
         self.assertEqual(sorted(str(path) for path in self.home.rglob("*")), before)
-        instructions.write_text(first + "\nMore personal instructions.\n")
+        for instructions in documents:
+            instructions.write_text(first[instructions] + "\nMore personal writing instructions.\n")
         (self.source / "guidance/research.md").write_text("Updated research policy.\n")
         self.install()
-        self.assertTrue(instructions.read_text().startswith(personal))
-        self.assertTrue(instructions.read_text().endswith("\nMore personal instructions.\n"))
-        self.assertIn("Updated research policy.", instructions.read_text())
-        self.assertEqual(instructions.read_text().count(installer.BEGIN), 1)
+        for instructions in documents:
+            self.assertTrue(instructions.read_text().startswith(personal))
+            self.assertTrue(instructions.read_text().endswith("\nMore personal writing instructions.\n"))
+            self.assertIn("Updated research policy.", instructions.read_text())
+            self.assertEqual(instructions.read_text().count(installer.BEGIN), 1)
 
     def test_existing_skill_or_locally_edited_skill_is_preserved(self):
         skill = self.home / ".claude/skills/research-code/SKILL.md"

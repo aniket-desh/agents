@@ -82,8 +82,9 @@ cd ~/tools/agents
 ```
 
 The profile installer supports `--agents codex claude pi` or a subset. It adds
-managed instruction blocks, installs two small skills, continuation adapters,
-and `~/.local/bin/research-compute` plus the workspace entry command. It preserves existing instructions and
+managed instruction blocks, installs the `research-code`, `gpu-research`, and
+`technical-writing` skills, continuation adapters, and
+`~/.local/bin/research-compute` plus the workspace entry command. It preserves existing instructions and
 settings, backs up changes, and refuses to overwrite conflicting or locally
 edited managed files. Ensure `~/.local/bin` is on your shell's PATH, then start
 a new agent conversation. It doesn't install agent subscriptions or start GPU
@@ -92,6 +93,9 @@ It does not install permission-bypassing `codex`/`claude` wrappers on the host.
 After deploying the controller below, follow [workspace setup](docs/workspaces.md)
 to build the image and authenticate. The profile installs into its private home
 automatically on first start.
+
+Use `research-code` for scientific implementation, `gpu-research` for compute
+workflows, and `technical-writing` for drafting or revising technical prose.
 
 **Autonomous continuation needs the agent's native support.** Codex may require
 one-time hook trust through `/hooks`; don't skip that trust step. Codex native
@@ -187,7 +191,8 @@ untrusted tenants.
 
 ## Code and validation
 
-- `guidance/` and `skills/` contain shared scientific coding and GPU workflows.
+- `guidance/` and `skills/` contain shared scientific coding, GPU workflows,
+  and technical writing guidance.
 - `integrations/` contains native conversation adapters; no separate model API.
 - `research_runtime/` contains the stdlib Python controller, MCP transport,
   detached SSH worker, collection, and agent-facing tools.

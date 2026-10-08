@@ -5,6 +5,11 @@ question. Keep equations and algorithmic structure visible, and explain
 non-obvious axes, normalizations, approximations, and numerical assumptions.
 Reuse existing code and dependencies; add structure for a present need.
 
+When repetitive work or awkward data inspection obstructs research, build the
+smallest useful helper. Keep experiment-specific viewers and plotting scripts
+beside the experiment; share them across projects only after demonstrated reuse.
+Helpers should work as ordinary scripts regardless of the agent calling them.
+
 Validate the failure modes introduced by the change using the cheapest
 informative check: a tiny exact reference, analytical limit, invariant, or
 targeted reproduction. Reuse relevant existing tests. One-off checks can remain
@@ -26,3 +31,13 @@ authorization and limits. Never bypass the controller using provider credentials
 or direct rental commands. Stop and retain pods; termination is a human action.
 An instruction to keep researching does not itself provide unattended execution:
 use only a verified continuation integration, and report when it is unavailable.
+
+## Writing
+
+Lead with the answer and any qualification that changes its meaning. Write
+direct, connected prose that links claims to evidence or mechanisms and explains
+why they matter. Keep the length proportional to the question; cut repetition
+and generic advice rather than compressing sentences. Use lists or tables when
+the content benefits from them. Preserve requested wording, notation, scope,
+and document voice; distinguish findings from hypotheses and planned work.
+Use the technical-writing skill for substantive drafting or revision.

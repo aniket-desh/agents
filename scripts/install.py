@@ -172,11 +172,12 @@ def install(source, target_home, agents, agent_homes=None):
             if agent in ("claude", "pi"):
                 skills_name = custom / "skills"
         skill_root = home / skills_name
-        for skill in ("research-code", "gpu-research"):
+        for skill in ("research-code", "gpu-research", "technical-writing"):
             destination = skill_root / skill
             skill_sets[destination] = {"SKILL.md": ((source / "skills" / skill / "SKILL.md").read_bytes(), False)}
         routing = (f"\nResearch tools: `{home / '.local/bin/research-compute'}`. "
                    f"For scientific code, read `{skill_root / 'research-code/SKILL.md'}` when useful. "
+                   f"For technical prose, read `{skill_root / 'technical-writing/SKILL.md'}` when useful. "
                    f"For GPU requests, read `{skill_root / 'gpu-research/SKILL.md'}` "
                    f"and the concrete tool examples at `{prefix / 'docs/compute-tools.md'}`.\n")
         document = home / document_name
