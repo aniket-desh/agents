@@ -26,12 +26,16 @@ a review pipeline. Preserve project-specific scientific conventions. Do not
 automatically pull, commit, or push merely because a research session started.
 
 The human interface is the ordinary agent conversation. For paid GPU work, use
-the installed gpu-research skill. When the research-compute controller is
-reachable, use its tools under the existing authorization and limits, and never
-bypass it using provider credentials or direct rental commands. When it is not,
-do not rent or create pods: run work only on a pod the user provisioned and
-handed over by SSH, as the skill's user-provisioned section describes.
-Stop and retain pods; termination is a human action.
+the installed gpu-research skill, which picks where each experiment runs: a pod
+whose SSH command the user gives; otherwise the research-compute controller when
+it is reachable, never bypassed with provider credentials or direct rental
+commands; otherwise a pod it creates with the official Runpod tools within the
+user's stated budget, with an on-pod stop timer. Stop and retain pods;
+termination is a human action.
+Name every new pod with the exact `aniket-` prefix. Only access, run work on,
+start, or stop pods whose current provider name has that prefix; never rename
+someone else's pod to adopt it. The controller also requires its own ledger
+ownership before reusing a pod.
 An instruction to keep researching does not itself provide unattended execution:
 use only a verified continuation integration, and report when it is unavailable.
 
