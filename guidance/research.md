@@ -26,9 +26,12 @@ a review pipeline. Preserve project-specific scientific conventions. Do not
 automatically pull, commit, or push merely because a research session started.
 
 The human interface is the ordinary agent conversation. For paid GPU work, use
-the installed gpu-research skill and research-compute tools under the existing
-authorization and limits. Never bypass the controller using provider credentials
-or direct rental commands. Stop and retain pods; termination is a human action.
+the installed gpu-research skill. When the research-compute controller is
+reachable, use its tools under the existing authorization and limits, and never
+bypass it using provider credentials or direct rental commands. When it is not,
+do not rent or create pods: run work only on a pod the user provisioned and
+handed over by SSH, as the skill's user-provisioned section describes.
+Stop and retain pods; termination is a human action.
 An instruction to keep researching does not itself provide unattended execution:
 use only a verified continuation integration, and report when it is unavailable.
 

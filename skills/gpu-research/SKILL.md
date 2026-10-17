@@ -1,6 +1,6 @@
 ---
 name: gpu-research
-description: Run budgeted research experiments on retained RunPod GPU workers through the local research-compute controller. Use for GPU allocation, experiment submission, results, spend, pause or continuation, and autonomous research requests.
+description: Run budgeted research experiments on retained RunPod GPU workers through the local research-compute controller, or over SSH on a pod the user provisioned when no controller is reachable. Use for GPU allocation, experiment submission, results, spend, pause or continuation, autonomous research requests, and any experiment on a pod whose SSH command the user hands over.
 ---
 
 # Budgeted GPU research
@@ -19,7 +19,8 @@ socket. Do not start
 your own controller, change owner configuration, use direct RunPod commands, or
 put provider credentials in research code.
 If doctor reports the fake provider, treat runs as local validation and do not
-report a simulated allocation as a real rented GPU.
+report a simulated allocation as a real rented GPU. If doctor cannot reach a
+controller, follow [User-provisioned pods](#user-provisioned-pods) instead.
 
 Use `session create --policy FILE` for a new investigation; use session status,
 list, journal, pause, resume, and finish for its existing record. Policies include
@@ -87,3 +88,52 @@ driver. Never switch to a hook to defeat a paused native Goal. Hook iteration an
 no-progress counters apply to hook-driven work, not native model usage; compute
 limits remain enforced in either mode. A native conversation crash or exhausted
 subscription requires user recovery, not another hidden agent.
+
+## User-provisioned pods
+
+Without a reachable controller, never create, rent, start, resize, or stop pods
+yourself. The user rents a pod in the Runpod console and hands over its SSH
+command. That handoff authorizes experiment work on that one pod; its lifecycle
+stays with the user.
+
+Identify the pod before the first remote command. A proxy login
+`<pod_id>-<suffix>@ssh.runpod.io` names the pod ID; a direct `root@IP -p PORT`
+must match exactly one pod's public TCP mapping. Confirm with a read-only Runpod
+pod lookup (list or get pod; no mutations) that its current name starts with
+`aniket-`. A missing name, failed lookup, ambiguous match, or other prefix means
+refuse; the user can rename their own pod in the console. Record the pod ID,
+name, GPU type and count, image, data center, and hourly `cost` from that read,
+and recheck the name when a later conversation resumes the work.
+
+There is no ledger. Use the budget or runtime limit the user states, asking only
+when none is given. Estimate spend as hourly cost times elapsed wall time since
+handoff, report it at milestones and on completion, and stop launching new runs
+before the limit. Disk and volume storage keep billing after the GPU stops.
+
+Prepare code and a cheap local check before using the GPU, as with the
+controller. Give each run an ID (UTC timestamp plus a short slug) and work under
+`/workspace/research/RUN_ID/` on the pod. Check that `/workspace` is a mounted
+volume before relying on it: the container disk is lost on stop, so put
+environments, caches, and checkpoints that must survive on the volume. Upload an
+immutable snapshot of tracked and unignored files (for example
+`git ls-files -co --exclude-standard`) with rsync over SSH, recording the commit,
+a hash of the uncommitted diff, and per-file hashes. Exclude secrets and caches.
+Never put credentials in commands, files, or manifests; use variables the user
+configured on the pod.
+
+Launch detached (`tmux new-session -d` or `nohup`) with stdout and stderr in the
+run directory, and write the exit code to a status file when the command ends.
+Wait for that file from a background shell or monitor rather than repeated model
+turns; a dropped SSH connection does not end a detached run. Collect small
+outputs, logs, plotting inputs, and a `manifest.json` (run ID, pod ID and name,
+GPU, image, source commit and hashes, argv, seeds, UTC start and end, exit code,
+estimated cost) into the local project, under its existing results convention or
+`runs/RUN_ID/`. Leave large checkpoints on the volume and record their remote
+paths. Compare collected sizes or hashes with the remote copy, and never report
+a partial or unverified collection as a final result.
+
+On the pod, run only the experiment and its setup. Do not change account or pod
+SSH keys, other users' processes, or other pods. When the work ends, report that
+the pod is idle, the estimated spend, and what stopping retains, then offer to
+stop it. Stop it only when the user says so: recheck the name, stop that pod by
+ID, and read back until it reports stopped. Never terminate a pod.
