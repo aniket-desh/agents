@@ -146,14 +146,26 @@ this machine sleeps or the conversation ends:
 
 ```sh
 mkdir -p /workspace/research
-nohup sh -c 'sleep SECONDS; runpodctl pod stop "$RUNPOD_POD_ID"' \
-  > /workspace/research/stop-timer.log 2>&1 &
+nohup sh -c '. /etc/rp_environment; export RUNPOD_API_KEY RUNPOD_POD_ID
+  sleep SECONDS
+  runpodctl stop pod "$RUNPOD_POD_ID" || runpodctl pod stop "$RUNPOD_POD_ID"' \
+  < /dev/null > /workspace/research/stop-timer.log 2>&1 &
 ```
 
-Set `SECONDS` to the smaller of the runtime limit and the remaining budget
-divided by the hourly cost, less a margin for collection. Check `command -v
-runpodctl` first; without it, say the pod has no self-stop and keep the run
+SSH sessions do not inherit the pod's environment: `RUNPOD_POD_ID` and the
+pod-scoped `RUNPOD_API_KEY` live in `/etc/rp_environment`, so source it. The
+`runpodctl` in Runpod images may be 1.x (`stop pod ID`) or 2.x (`pod stop ID`);
+the fallback covers both. Redirect stdin as shown, or the SSH command never
+returns. Confirm the key works with `runpodctl get pod "$RUNPOD_POD_ID"` after
+sourcing. Set `SECONDS` to the smaller of the runtime limit and the remaining
+budget divided by the hourly cost, less a margin for collection. Without
+`runpodctl` or a working key, say the pod has no self-stop and keep the run
 short. To extend, kill that timer and arm a new one within the budget.
+
+Check the pod's SSH host key against the fingerprints its container log prints
+at startup (`stream-pod-logs`) when they are available. Every start creates a
+new container, which brings a new host key and usually a new SSH port, so read
+the pod again after each start.
 
 Before creating another pod, reuse a stopped `aniket-` pod you created for the
 same investigation (its ID is in the run manifests) by starting it, recognizing
