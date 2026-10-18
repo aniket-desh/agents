@@ -1,6 +1,6 @@
 ---
 name: gpu-research
-description: Run budgeted research experiments on retained RunPod GPU workers through the local research-compute controller. Use for GPU allocation, experiment submission, results, spend, pause or continuation, and autonomous research requests.
+description: Run budgeted research experiments on RunPod GPUs. Picks the placement per experiment with no mode setting - a pod whose SSH command the user gives, else the local research-compute controller when reachable, else a pod it creates with the official Runpod tools under a self-stop timer. Use for any GPU experiment, allocation, results, spend, pause or continuation, and autonomous research requests.
 ---
 
 # Budgeted GPU research
@@ -16,10 +16,35 @@ contract; the installed instructions link to `docs/compute-tools.md` with concre
 policy and run-spec examples. Start with `research-compute doctor`. The client
 connects to the local controller; `RESEARCH_COMPUTE_SOCKET` overrides its default
 socket. Do not start
-your own controller, change owner configuration, use direct RunPod commands, or
-put provider credentials in research code.
+your own controller, change owner configuration, or put provider credentials in
+research code. While a controller is reachable, do not use direct RunPod
+commands for its work.
 If doctor reports the fake provider, treat runs as local validation and do not
 report a simulated allocation as a real rented GPU.
+
+## Where an experiment runs
+
+There is no mode setting; decide for each experiment and say which in one line:
+
+0. You are running on a Runpod pod (`RUNPOD_POD_ID` is set, or
+   `/etc/rp_environment` exists): this pod is the GPU host; follow
+   [This pod](#this-pod) and create no other pods unless the user asks.
+1. The user gave an SSH command or named a pod: run there, as a
+   [handed-over pod](#handed-over-pods).
+2. Otherwise, if `research-compute doctor` reaches a live controller, use the
+   controller workflow below.
+3. Otherwise, [create a pod](#created-pods) with the official Runpod tools.
+
+A request for a pod the user will SSH into and work on themselves is not an
+experiment placement; follow [Agent-host pods](#agent-host-pods).
+
+Every new pod must have a name starting with `aniket-`. Only access, execute on,
+start, or stop pods whose current provider name starts with that exact prefix.
+Never rename or adopt other users' pods. The controller enforces this prefix
+and requires ledger ownership for reuse; outside the controller the prefix is
+your own check, not a provider permission.
+
+## Controller workflow
 
 Use `session create --policy FILE` for a new investigation; use session status,
 list, journal, pause, resume, and finish for its existing record. Policies include
@@ -87,3 +112,134 @@ driver. Never switch to a hook to defeat a paused native Goal. Hook iteration an
 no-progress counters apply to hook-driven work, not native model usage; compute
 limits remain enforced in either mode. A native conversation crash or exhausted
 subscription requires user recovery, not another hidden agent.
+
+## Pods outside the controller
+
+### This pod
+
+The user set this pod up as a persistent agent host (`scripts/pod-setup.sh`),
+so you, your tmux session, and the experiments share one machine. The user
+owns this pod's lifetime and budget: do not ask for a budget or track spend
+unless they set one. Confirm the GPUs with `nvidia-smi`; `runpodctl get pod
+"$RUNPOD_POD_ID"` (login shells export the variables) shows the pod's name
+and hourly cost if needed. Run jobs locally with the same detached-run, status-file, and
+manifest procedure below, keeping run directories, environments, caches, and
+checkpoints under `/workspace`, since the container disk is lost on stop.
+
+Do not arm a stop timer or stop this pod on your own: stopping it ends your
+session and the user's. If the user sets an end time or asks you to stop
+when done, first collect results, write the manifest and next steps to
+`/workspace`, and report, then stop it with `runpodctl stop pod
+"$RUNPOD_POD_ID"` (or `pod stop` on runpodctl 2.x). A job you launched
+detached keeps running if your session ends; check for it before starting
+another on resumption.
+
+### Handed-over pods
+
+The user rented the pod and handed over its SSH command. That authorizes
+experiment work on that one pod; its lifecycle stays with the user. Identify it
+before the first remote command: a proxy login `<pod_id>-<suffix>@ssh.runpod.io`
+names the pod ID, and a direct `root@IP -p PORT` must match exactly one pod's
+public TCP mapping in a read-only Runpod pod lookup. Confirm the current name
+starts with `aniket-`; a missing name, failed lookup, ambiguous match, or other
+prefix means refuse (the user can rename their own pod in the console). Use the
+budget or runtime limit the user states. At the end, report the pod idle with
+its estimated spend and offer to stop it; stop only when the user says so.
+
+### Agent-host pods
+
+When the user asks for a pod to work on themselves, for example "spin up a pod
+with 4 H100s, put our setup on it, and clone this repo and branch", it is an
+agent host, and its lifetime and budget are theirs. Quote the hourly price from
+a catalog read and create it without asking for a budget: name
+`aniket-<project>-host`, the hardware they named, a `/workspace` volume sized
+for the work, `ports: ["22/tcp"]`, and `env.PUBLIC_KEY` set to the user's own
+public key (on a team account, `startSsh` would admit every team key as
+root). Read it back until direct SSH is up, run `scripts/pod-setup.sh` from
+the agents checkout with their repo and branch, and give them the
+`ssh USER@IP -p PORT` command and the project path. Arm no stop timer, track
+no spend, and never stop it unless they ask.
+
+### Created pods
+
+Create a pod only for an experiment the user asked to run, with a dollar budget
+they stated or standing policy supplies; ask for a material missing limit. That
+request is the go: quote the hourly price from a catalog read in the same reply
+and create, without a separate confirmation. Verify the authenticated account
+with a read before the first create, as the user's instructions require.
+
+Pick the smallest GPU that fits the job from live stock (`list-gpu-types`,
+`get-capacity`), and stay within the hourly price the budget allows for the
+expected runtime. Create with `create-pod`: name
+`aniket-<project>-<short-slug>`; a pinned image (default
+`runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` unless the project needs
+another); `gpu` with `id`, `count`, and `minCudaVersion: "12.8"`; `cloud:
+"SECURE"`; `ports: ["22/tcp"]`; `startSsh: true`, which injects the account's
+registered SSH keys; a container `disk` near 30 GB; and
+`mounts.persistent` at `/workspace` sized for environments, data, and
+checkpoints. Read the pod back until it is `RUNNING` with a direct SSH address,
+and confirm the name and GPU you set.
+
+Arm a self-stop timer as the first remote command, so the pod stops even if
+this machine sleeps or the conversation ends:
+
+```sh
+mkdir -p /workspace/research
+nohup sh -c '. /etc/rp_environment; export RUNPOD_API_KEY RUNPOD_POD_ID
+  sleep SECONDS
+  runpodctl stop pod "$RUNPOD_POD_ID" || runpodctl pod stop "$RUNPOD_POD_ID"' \
+  < /dev/null > /workspace/research/stop-timer.log 2>&1 &
+```
+
+SSH sessions do not inherit the pod's environment: `RUNPOD_POD_ID` and the
+pod-scoped `RUNPOD_API_KEY` live in `/etc/rp_environment`, so source it. The
+`runpodctl` in Runpod images may be 1.x (`stop pod ID`) or 2.x (`pod stop ID`);
+the fallback covers both. Redirect stdin as shown, or the SSH command never
+returns. Confirm the key works with `runpodctl get pod "$RUNPOD_POD_ID"` after
+sourcing. Set `SECONDS` to the smaller of the runtime limit and the remaining
+budget divided by the hourly cost, less a margin for collection. Without
+`runpodctl` or a working key, say the pod has no self-stop and keep the run
+short. To extend, kill that timer and arm a new one within the budget.
+
+Check the pod's SSH host key against the fingerprints its container log prints
+at startup (`stream-pod-logs`) when they are available. Every start creates a
+new container, which brings a new host key and usually a new SSH port, so read
+the pod again after each start.
+
+Before creating another pod, reuse a stopped `aniket-` pod you created for the
+same investigation (its ID is in the run manifests) by starting it, recognizing
+that its GPU may be unavailable. When the work ends, stop the pod yourself,
+read it back until it reports `EXITED`, and report the spend and the volume
+storage that keeps billing. Never terminate a pod.
+
+### Running on either kind
+
+There is no ledger. Record the pod ID, name, GPU type and count, image, data
+center, and hourly `cost` from a pod read. Estimate spend as hourly cost times
+elapsed wall time since creation or handoff, report it at milestones and on
+completion, and stop launching runs before the limit. Recheck the name when a
+later conversation resumes the work.
+
+Prepare code and a cheap local check before using the GPU. Give each run an ID
+(UTC timestamp plus a short slug) and work under `/workspace/research/RUN_ID/`.
+Check that `/workspace` is a mounted volume before relying on it: the container
+disk is lost on stop, so put environments, caches, and checkpoints that must
+survive on the volume. Upload an immutable snapshot of tracked and unignored
+files (for example `git ls-files -co --exclude-standard`) with rsync over SSH,
+recording the commit, a hash of the uncommitted diff, and per-file hashes.
+Exclude secrets and caches. Never put credentials in commands, files, or
+manifests; use variables configured on the pod.
+
+Launch detached (`tmux new-session -d` or `nohup`) with stdout and stderr in the
+run directory, and write the exit code to a status file when the command ends.
+Wait for that file from a background shell or monitor rather than repeated model
+turns; a dropped SSH connection does not end a detached run. Collect small
+outputs, logs, plotting inputs, and a `manifest.json` (run ID, pod ID and name,
+GPU, image, source commit and hashes, argv, seeds, UTC start and end, exit code,
+estimated cost) into the local project, under its existing results convention or
+`runs/RUN_ID/`. Leave large checkpoints on the volume and record their remote
+paths. Compare collected sizes or hashes with the remote copy, and never report
+a partial or unverified collection as a final result.
+
+On the pod, run only the experiment, its setup, and the stop timer. Do not
+change account or pod SSH keys, other users' processes, or other pods.

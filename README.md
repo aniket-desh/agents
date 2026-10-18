@@ -69,6 +69,44 @@ Changing agents preserves the journal, artifacts, and budget, not the proprietar
 chat transcript. Ask the old agent to pause before handing an investigation to
 a new conversation; the binding prevents two autonomous drivers owning it.
 
+## Persistent agents on a Runpod pod
+
+For long work that should continue with the laptop closed (SAE training, a day
+of autoresearch), run the agents on a pod you open in the Runpod console. Give
+it a volume mounted at `/workspace`, since only that survives a stop. On a team
+account, set the pod's `PUBLIC_KEY` environment variable to your own key: by
+default every registered team key can log in as root and read the agents'
+logins. Then, from this checkout on your laptop, pass the console's direct SSH
+command:
+
+```sh
+scripts/pod-setup.sh 'ssh root@IP -p PORT' \
+  --repo https://github.com/OWNER/PROJECT.git --branch BRANCH
+```
+
+The script copies this checkout as it is on disk, the private skills named in
+`PRIVATE_SKILLS` (default `research-note write-technical-prose`), the text above
+the research-agents block in `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, and
+Codex's model settings to `/workspace/.agent-setup`, so nothing private is
+published. On the pod, `pod/bootstrap.sh` creates your user with its home on
+`/workspace`, installs Claude Code, Codex, tmux, and the research profile,
+clones the project (signing in to GitHub by device code if the clone needs it),
+and runs the project's `scripts/runpod_setup.sh` or the generic `provision/`
+one. Then:
+
+```sh
+ssh USER@IP -p PORT
+tmux new -A -s research
+claude          # first time: finish /login; then `codex login --device-auth`
+claude-pod      # or codex-pod: no approval prompts, for this dedicated pod
+```
+
+Detach with `Ctrl-b d` and close the laptop. Logins, both CLIs, skills, the
+checkout, and caches live on the volume. After a pod stop and start, SSH in as
+root and run `bash /workspace/bootstrap.sh` to rebuild the container side; the
+checkout is never moved by a re-run. Agents running on the pod use its GPUs and
+never stop it unless you ask (see the gpu-research skill).
+
 ## One-time installation
 
 Use a Linux host with systemd, Python 3.11+, Git, and local Docker. Live RunPod

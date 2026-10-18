@@ -1,8 +1,9 @@
 ## Legacy pod-local agent setup
 
-This older workflow remains available for existing installations. New installs
-use the [persistent-host workflow](../README.md). The optional team bundle and
-its hooks are not installed by the new `install.sh`.
+This page records the older workflow. Its curl-pipe `setup.sh` is retired and
+now only points to `scripts/pod-setup.sh`; see [persistent agents on a Runpod
+pod](../README.md#persistent-agents-on-a-runpod-pod). The optional team bundle
+and its hooks are not installed by the new `install.sh`.
 
 A two-part setup repo for running AI research on rented GPUs:
 
