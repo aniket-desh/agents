@@ -35,6 +35,9 @@ There is no mode setting; decide for each experiment and say which in one line:
    controller workflow below.
 3. Otherwise, [create a pod](#created-pods) with the official Runpod tools.
 
+A request for a pod the user will SSH into and work on themselves is not an
+experiment placement; follow [Agent-host pods](#agent-host-pods).
+
 Every new pod must have a name starting with `aniket-`. Only access, execute on,
 start, or stop pods whose current provider name starts with that exact prefix.
 Never rename or adopt other users' pods. The controller enforces this prefix
@@ -115,10 +118,11 @@ subscription requires user recovery, not another hidden agent.
 ### This pod
 
 The user set this pod up as a persistent agent host (`scripts/pod-setup.sh`),
-so you, your tmux session, and the experiments share one machine. Confirm the
-GPUs with `nvidia-smi`, and read the pod's name and hourly cost with
-`runpodctl get pod "$RUNPOD_POD_ID"` (login shells export the variables) to
-estimate spend. Run jobs locally with the same detached-run, status-file, and
+so you, your tmux session, and the experiments share one machine. The user
+owns this pod's lifetime and budget: do not ask for a budget or track spend
+unless they set one. Confirm the GPUs with `nvidia-smi`; `runpodctl get pod
+"$RUNPOD_POD_ID"` (login shells export the variables) shows the pod's name
+and hourly cost if needed. Run jobs locally with the same detached-run, status-file, and
 manifest procedure below, keeping run directories, environments, caches, and
 checkpoints under `/workspace`, since the container disk is lost on stop.
 
@@ -141,6 +145,20 @@ starts with `aniket-`; a missing name, failed lookup, ambiguous match, or other
 prefix means refuse (the user can rename their own pod in the console). Use the
 budget or runtime limit the user states. At the end, report the pod idle with
 its estimated spend and offer to stop it; stop only when the user says so.
+
+### Agent-host pods
+
+When the user asks for a pod to work on themselves, for example "spin up a pod
+with 4 H100s, put our setup on it, and clone this repo and branch", it is an
+agent host, and its lifetime and budget are theirs. Quote the hourly price from
+a catalog read and create it without asking for a budget: name
+`aniket-<project>-host`, the hardware they named, a `/workspace` volume sized
+for the work, `ports: ["22/tcp"]`, and `env.PUBLIC_KEY` set to the user's own
+public key (on a team account, `startSsh` would admit every team key as
+root). Read it back until direct SSH is up, run `scripts/pod-setup.sh` from
+the agents checkout with their repo and branch, and give them the
+`ssh USER@IP -p PORT` command and the project path. Arm no stop timer, track
+no spend, and never stop it unless they ask.
 
 ### Created pods
 
