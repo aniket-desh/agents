@@ -26,7 +26,8 @@ a review pipeline. Preserve project-specific scientific conventions. Do not
 automatically pull, commit, or push merely because a research session started.
 
 The human interface is the ordinary agent conversation. For paid GPU work, use
-the installed gpu-research skill, which picks where each experiment runs: a pod
+the installed gpu-research skill, which picks where each experiment runs: the
+pod you are running on, when the user set one up as an agent host; a pod
 whose SSH command the user gives; otherwise the research-compute controller when
 it is reachable, never bypassed with provider credentials or direct rental
 commands; otherwise a pod it creates with the official Runpod tools within the

@@ -26,6 +26,9 @@ report a simulated allocation as a real rented GPU.
 
 There is no mode setting; decide for each experiment and say which in one line:
 
+0. You are running on a Runpod pod (`RUNPOD_POD_ID` is set, or
+   `/etc/rp_environment` exists): this pod is the GPU host; follow
+   [This pod](#this-pod) and create no other pods unless the user asks.
 1. The user gave an SSH command or named a pod: run there, as a
    [handed-over pod](#handed-over-pods).
 2. Otherwise, if `research-compute doctor` reaches a live controller, use the
@@ -108,6 +111,24 @@ limits remain enforced in either mode. A native conversation crash or exhausted
 subscription requires user recovery, not another hidden agent.
 
 ## Pods outside the controller
+
+### This pod
+
+The user set this pod up as a persistent agent host (`scripts/pod-setup.sh`),
+so you, your tmux session, and the experiments share one machine. Confirm the
+GPUs with `nvidia-smi`, and read the pod's name and hourly cost with
+`runpodctl get pod "$RUNPOD_POD_ID"` (variables come from `~/.runpod_env`) to
+estimate spend. Run jobs locally with the same detached-run, status-file, and
+manifest procedure below, keeping run directories, environments, caches, and
+checkpoints under `/workspace`, since the container disk is lost on stop.
+
+Do not arm a stop timer or stop this pod on your own: stopping it ends your
+session and the user's. If the user sets an end time or asks you to stop
+when done, first collect results, write the manifest and next steps to
+`/workspace`, and report, then stop it with `runpodctl stop pod
+"$RUNPOD_POD_ID"` (or `pod stop` on runpodctl 2.x). A job you launched
+detached keeps running if your session ends; check for it before starting
+another on resumption.
 
 ### Handed-over pods
 
