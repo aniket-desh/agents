@@ -75,12 +75,15 @@ if [ -f /etc/rp_environment ] && { [ -z "$host" ] || [ -z "$port" ]; }; then
     # shellcheck disable=SC1091
     port="$(. /etc/rp_environment; echo "${RUNPOD_TCP_PORT_22:-}")"
 fi
+REPO_DIR="$USER_ROOT/$(basename "$REPO" .git)"
+PROJECT_DIR="$REPO_DIR${PROJECT_SUBDIR:+/$PROJECT_SUBDIR}"
 cat <<EOF
 
 Setup complete. From the laptop:
 
     ssh $USER_NAME@${host:-<pod-ip>} -p ${port:-<port>}
     tmux new -A -s $TMUX_SESSION
+    cd $PROJECT_DIR
 
 First time only, inside tmux: run \`claude\` and finish /login, then
 \`codex login --device-auth\`. Both logins persist on the volume.
@@ -90,6 +93,19 @@ prompts on this dedicated pod; plain \`claude\` and \`codex\` still ask):
 
     claude-pod        # or: codex-pod
 
-Detach with Ctrl-b d and close the laptop; reattach with the two commands above.
+Detach with Ctrl-b d and close the laptop; reattach with the first two commands.
 After a pod stop and start, SSH in as root and run: bash /workspace/bootstrap.sh
 EOF
+if [ ! -d "$REPO_DIR/.git" ]; then
+    cat <<EOF
+
+The project was NOT cloned: $REPO
+needs GitHub sign-in, which this run could not prompt for. After you SSH in as
+$USER_NAME, sign in once (device code; stored on the volume), then rerun the
+setup, which clones the project and runs its setup:
+
+    gh auth login --hostname github.com --git-protocol https --web
+    gh auth setup-git
+    sudo bash /workspace/bootstrap.sh
+EOF
+fi

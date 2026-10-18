@@ -93,20 +93,26 @@ echo "   skills: $(ls "$HOME/.claude/skills" | tr '\n' ' ')"
 echo ">> project"
 REPO_DIR="$USER_ROOT/$(basename "$REPO" .git)"
 clone() {
+    # Fail fast instead of prompting for a password GitHub would reject.
     if [ -n "$BRANCH" ]; then
-        git clone --branch "$BRANCH" "$REPO" "$REPO_DIR"
+        GIT_TERMINAL_PROMPT=0 git clone --branch "$BRANCH" "$REPO" "$REPO_DIR"
     else
-        git clone "$REPO" "$REPO_DIR"
+        GIT_TERMINAL_PROMPT=0 git clone "$REPO" "$REPO_DIR"
     fi
 }
+cloned=1
 if [ ! -d "$REPO_DIR/.git" ]; then
     if ! clone; then
-        if ! gh auth status >/dev/null 2>&1; then
+        # A private repository needs GitHub sign-in, which needs a person at a
+        # terminal; without one, finish the rest and let bootstrap.sh explain.
+        if [ -t 0 ] && ! gh auth status >/dev/null 2>&1; then
             echo "   Clone failed; sign in to GitHub (device code, stored in this home):"
-            gh auth login --hostname github.com --git-protocol https --web
+            gh auth login --hostname github.com --git-protocol https --web || true
         fi
-        gh auth setup-git
-        clone
+        if ! { gh auth status >/dev/null 2>&1 && gh auth setup-git && clone; }; then
+            cloned=0
+            echo "   WARNING: could not clone $REPO; continuing without the project." >&2
+        fi
     fi
 else
     # Never move an existing checkout: a running investigation may depend on it.
@@ -114,7 +120,7 @@ else
 fi
 PROJECT_DIR="$REPO_DIR${PROJECT_SUBDIR:+/$PROJECT_SUBDIR}"
 marker="$USER_ROOT/.project-setup-done-$(basename "$REPO_DIR")"
-if [ "$PROJECT_SETUP" = 1 ] && [ ! -f "$marker" ]; then
+if [ "$cloned" = 1 ] && [ "$PROJECT_SETUP" = 1 ] && [ ! -f "$marker" ]; then
     helper="$PROJECT_DIR/scripts/runpod_setup.sh"
     [ -f "$helper" ] || helper="$SETUP/agents/provision/runpod_setup.sh"
     if (cd "$PROJECT_DIR" && RUNPOD_PROJECT_DIR="$PROJECT_DIR" bash "$helper"); then
