@@ -44,29 +44,18 @@ if ! id "$USER_NAME" >/dev/null 2>&1; then
     getent group "$gid" >/dev/null || groupadd -g "$gid" "$USER_NAME"
     useradd -u "$uid" -g "$gid" -d "$HOME_DIR" -M -s /bin/bash "$USER_NAME"
 fi
-mkdir -p "$HOME_DIR/.ssh"
-chown "$USER_NAME:" "$USER_ROOT" "$HOME_DIR"
 echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/90-$USER_NAME"
 chmod 440 "/etc/sudoers.d/90-$USER_NAME"
 
-# Only the laptop key that ran pod-setup.sh may log in as this user. Root keeps
-# whatever Runpod injected (for a team pod, every registered team key).
-install -m 600 -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" "$SETUP/private/authorized_keys" "$HOME_DIR/.ssh/authorized_keys"
-chown "$USER_NAME:" "$HOME_DIR/.ssh"
-chmod 700 "$HOME_DIR/.ssh"
-
-# The pod's own ID and pod-scoped API key live in /etc/rp_environment, which
-# SSH sessions do not inherit; give the user a copy so an agent can read its
-# pod's cost and stop it when told to.
-if [ -f /etc/rp_environment ]; then
-    grep -E '^(export )?RUNPOD_' /etc/rp_environment | sed -E 's/^(export )?/export /' > "$HOME_DIR/.runpod_env"
-    chown "$USER_NAME:" "$HOME_DIR/.runpod_env"
-    chmod 600 "$HOME_DIR/.runpod_env"
+# Runpod volumes are NFS: root can neither chown there nor enter the user's
+# private files, while files the user creates are the user's. So the user
+# creates its own directories, and the setup bundle stays world-readable.
+if [ -e "$USER_ROOT" ] && [ "$(stat -c %u "$USER_ROOT")" != "$(id -u "$USER_NAME")" ]; then
+    echo "ERROR: $USER_ROOT exists but is not owned by $USER_NAME; move it aside and rerun." >&2
+    exit 1
 fi
-
-mkdir -p /workspace/.cache/huggingface
-chown "$USER_NAME:" /workspace/.cache /workspace/.cache/huggingface
-chown -R "$USER_NAME:" "$SETUP"
+su "$USER_NAME" -s /bin/bash -c "mkdir -p '$HOME_DIR' && chmod 755 '$USER_ROOT' '$HOME_DIR'"
+chmod -R u=rwX,go=rX "$SETUP"
 
 echo "=== [3/4] agents, profile, and project (as $USER_NAME) ==="
 su - "$USER_NAME" -c "bash $SETUP/agents/pod/user-setup.sh"

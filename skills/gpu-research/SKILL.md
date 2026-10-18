@@ -117,7 +117,7 @@ subscription requires user recovery, not another hidden agent.
 The user set this pod up as a persistent agent host (`scripts/pod-setup.sh`),
 so you, your tmux session, and the experiments share one machine. Confirm the
 GPUs with `nvidia-smi`, and read the pod's name and hourly cost with
-`runpodctl get pod "$RUNPOD_POD_ID"` (variables come from `~/.runpod_env`) to
+`runpodctl get pod "$RUNPOD_POD_ID"` (login shells export the variables) to
 estimate spend. Run jobs locally with the same detached-run, status-file, and
 manifest procedure below, keeping run directories, environments, caches, and
 checkpoints under `/workspace`, since the container disk is lost on stop.

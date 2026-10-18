@@ -95,12 +95,11 @@ cp "$PUBKEY" "$STAGE/private/authorized_keys"
 } > "$STAGE/pod.env"
 
 echo ">> copying to the pod's /workspace/.agent-setup"
-# COPYFILE_DISABLE keeps macOS tar from adding ._ metadata files.
-COPYFILE_DISABLE=1 tar -C "$STAGE" -czf - . | ssh "${SSH_ARGS[@]}" \
+# COPYFILE_DISABLE and --no-xattrs keep macOS metadata out of the archive.
+COPYFILE_DISABLE=1 tar --no-xattrs -C "$STAGE" -czf - . | ssh "${SSH_ARGS[@]}" \
     'set -e; rm -rf /workspace/.agent-setup.new; mkdir -p /workspace/.agent-setup.new
      tar -xzf - -C /workspace/.agent-setup.new --no-same-owner
-     rm -rf /workspace/.agent-setup; mv /workspace/.agent-setup.new /workspace/.agent-setup
-     chmod -R go-rwx /workspace/.agent-setup'
+     rm -rf /workspace/.agent-setup; mv /workspace/.agent-setup.new /workspace/.agent-setup'
 
 echo ">> running the pod bootstrap"
 ssh -t "${SSH_ARGS[@]}" 'bash /workspace/.agent-setup/agents/pod/bootstrap.sh'

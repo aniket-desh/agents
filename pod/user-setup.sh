@@ -20,12 +20,20 @@ add_line() {
 add_line 'export PATH="$HOME/.local/bin:$PATH"'
 add_line 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8'
 add_line 'export HF_HOME=/workspace/.cache/huggingface'
-add_line '[ -f "$HOME/.runpod_env" ] && . "$HOME/.runpod_env"'
+# SSH sessions do not inherit the pod's ID and pod-scoped API key; export them
+# so an agent can read this pod's cost and stop it when told to.
+add_line "[ -r /etc/rp_environment ] && eval \"\$(grep -E '^(export )?RUNPOD_' /etc/rp_environment | sed -E 's/^(export )?/export /')\""
 # An exported ANTHROPIC_API_KEY makes Claude Code bill API rates even when
 # logged in to a subscription, so interactive launches drop it.
 add_line "alias claude='env -u ANTHROPIC_API_KEY claude'"
 add_line "claude-pod() { env -u ANTHROPIC_API_KEY claude --dangerously-skip-permissions \"\$@\"; }"
 add_line "codex-pod() { codex --dangerously-bypass-approvals-and-sandbox \"\$@\"; }"
+# Only the laptop key that ran pod-setup.sh may log in as this user; sshd's
+# StrictModes rejects a group-writable home or key file.
+chmod 755 "$HOME"
+install -d -m 700 "$HOME/.ssh"
+install -m 600 "$SETUP/private/authorized_keys" "$HOME/.ssh/authorized_keys"
+mkdir -p /workspace/.cache/huggingface 2>/dev/null || echo "   WARNING: cannot create /workspace/.cache/huggingface" >&2
 [ -f "$HOME/.tmux.conf" ] || cat > "$HOME/.tmux.conf" <<'EOF'
 set -g default-terminal "tmux-256color"
 set -ga terminal-overrides ",xterm-256color:Tc,xterm*:Tc"
