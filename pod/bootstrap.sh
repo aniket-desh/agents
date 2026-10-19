@@ -88,12 +88,15 @@ Setup complete. From the laptop:
 First time only, inside tmux: run \`claude\` and finish /login, then
 \`codex login --device-auth\`. Both logins persist on the volume.
 
-Then start agents from the project directory (they run without approval
-prompts on this dedicated pod; plain \`claude\` and \`codex\` still ask):
+Then start an agent from the project directory:
 
-    claude-pod        # or: codex-pod
+    claude-pod        # auto mode + Remote Control: continue it from the Claude app
+    claude-pod-yolo   # no permission checks at all
+    codex-pod         # Codex without approvals or sandbox
 
-Detach with Ctrl-b d and close the laptop; reattach with the first two commands.
+Detach with Ctrl-b d and close the laptop. A claude-pod session also appears
+in the Claude desktop app and on your phone; reattach in a terminal with the
+first two commands.
 After a pod stop and start, SSH in as root and run: bash /workspace/bootstrap.sh
 EOF
 if [ ! -d "$REPO_DIR/.git" ]; then

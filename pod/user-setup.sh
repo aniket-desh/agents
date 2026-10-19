@@ -26,7 +26,15 @@ add_line "[ -r /etc/rp_environment ] && eval \"\$(grep -E '^(export )?RUNPOD_' /
 # An exported ANTHROPIC_API_KEY makes Claude Code bill API rates even when
 # logged in to a subscription, so interactive launches drop it.
 add_line "alias claude='env -u ANTHROPIC_API_KEY claude'"
-add_line "claude-pod() { env -u ANTHROPIC_API_KEY claude --dangerously-skip-permissions \"\$@\"; }"
+# Launchers are redefined on every run, so drop earlier versions first.
+for rc in "$HOME/.bashrc" "$HOME/.profile"; do
+    sed -i -E '/^(claude-pod|claude-pod-yolo|codex-pod)\(\) \{/d' "$rc"
+done
+# claude-pod: auto mode lets routine work run without prompts while screening
+# risky actions, and Remote Control lets the Claude app or phone drive the
+# session that tmux keeps alive here. claude-pod-yolo skips all checks.
+add_line "claude-pod() { env -u ANTHROPIC_API_KEY claude --permission-mode auto --remote-control \"pod-\$(basename \"\$PWD\")\" \"\$@\"; }"
+add_line "claude-pod-yolo() { env -u ANTHROPIC_API_KEY claude --dangerously-skip-permissions \"\$@\"; }"
 add_line "codex-pod() { codex --dangerously-bypass-approvals-and-sandbox \"\$@\"; }"
 # Only the laptop key that ran pod-setup.sh may log in as this user; sshd's
 # StrictModes rejects a group-writable home or key file.

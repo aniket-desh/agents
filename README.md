@@ -98,10 +98,15 @@ one. Then:
 ssh USER@IP -p PORT
 tmux new -A -s research
 claude          # first time: finish /login; then `codex login --device-auth`
-claude-pod      # or codex-pod: no approval prompts, for this dedicated pod
+claude-pod      # auto mode + Remote Control
 ```
 
-Detach with `Ctrl-b d` and close the laptop. Logins, both CLIs, skills, the
+`claude-pod` runs Claude Code in auto mode, which lets routine work proceed
+without prompts while screening risky actions, with Remote Control on, so you
+can continue the session from the Claude desktop app or your phone while tmux
+keeps it alive on the pod. `claude-pod-yolo` skips permission checks entirely,
+and `codex-pod` runs Codex without approvals or sandbox. Detach with
+`Ctrl-b d` and close the laptop. Logins, both CLIs, skills, the
 checkout, and caches live on the volume. After a pod stop and start, SSH in as
 root and run `bash /workspace/bootstrap.sh` to rebuild the container side; the
 checkout is never moved by a re-run. Agents running on the pod use its GPUs and
