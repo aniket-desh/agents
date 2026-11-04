@@ -153,8 +153,8 @@ def install(source, target_home, agents, agent_homes=None):
     if not workspace_launcher.is_file():
         raise ValueError("Workspace launcher is missing; install a complete revision.")
     package_files["scripts/research-workspace.py"] = (workspace_launcher.read_bytes(), False)
-    for path in sorted(runtime.rglob("*.py")):
-        if "__pycache__" not in path.parts:
+    for path in sorted(runtime.rglob("*")):
+        if path.is_file() and path.suffix in (".py", ".mjs") and "__pycache__" not in path.parts:
             package_files[str(path.relative_to(source))] = (path.read_bytes(), False)
     for directory in ("integrations", "docs"):
         for path in sorted((source / directory).rglob("*")):
@@ -251,8 +251,8 @@ def stage_controller(source, stage_root, config, provider_env=None, replace_conf
         destinations[root / "etc/research-compute/runpod.env"] = provider_env.read_bytes()
     prefix = root / "opt/research-agents"
     files = {"bin/research-compute": ((source / "bin/research-compute").read_bytes(), True)}
-    for path in sorted((source / "research_runtime").rglob("*.py")):
-        if "__pycache__" not in path.parts:
+    for path in sorted((source / "research_runtime").rglob("*")):
+        if path.is_file() and path.suffix in (".py", ".mjs") and "__pycache__" not in path.parts:
             if path.is_symlink():
                 raise ValueError(f"Refusing linked controller source: {path}")
             files[str(path.relative_to(source))] = (path.read_bytes(), False)

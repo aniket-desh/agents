@@ -1,0 +1,26 @@
+{
+  "provider": {
+    "kind": "mcp",
+    "env_file": "/etc/research-compute/runpod.env",
+    "timeout_seconds": 45
+  },
+  "limits": {
+    "budget_usd": null,
+    "max_gpus": 256,
+    "max_pods": 256,
+    "max_hourly_usd": 10000,
+    "max_retained_gb": 1000,
+    "max_volume_gb": 200,
+    "max_container_disk_gb": 200,
+    "allowed_gpu_types": ["*"],
+    "allowed_images": ["*"],
+    "allowed_templates": ["*"]
+  },
+  "safety": {
+    "poll_seconds": 15,
+    "shutdown_margin_seconds": 120,
+    "max_lease_seconds": 604800,
+    "checkpoint_grace_seconds": 30,
+    "idle_grace_seconds": 120
+  }
+}

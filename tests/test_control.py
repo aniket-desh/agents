@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from research_runtime.control import Controller, PolicyError
+from research_runtime.service import load_config
 
 
 class Provider:
@@ -81,6 +82,166 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(sum(r is not None for r in results), 2)
         self.assertEqual(self.provider.creates, 2)
 
+    def test_optional_account_cap_preserves_independent_session_limits(self):
+        self.config["limits"]["budget_usd"] = None
+        small = self.session(budget_usd=0.8)
+        large = self.session(budget_usd=50)
+        self.allocate(small)
+        self.now += 2900
+        self.ctrl.watchdog_tick()
+        self.assertEqual(self.status(small)["status"], "BUDGET_REACHED")
+        self.assertEqual(self.status(large)["status"], "ACTIVE")
+        self.assertIn("pod", self.allocate(large))
+        with self.assertRaises(PolicyError):
+            self.session(budget_usd=0)
+        with self.assertRaises(PolicyError):
+            self.session(budget_usd=-1)
+        self.assertIsNone(self.ctrl.dispatch("doctor", {}, 1000)["account_budget_usd"])
+
+    def test_no_account_cap_still_reserves_against_session_budget(self):
+        self.config["limits"]["budget_usd"] = None
+        sid = self.session(budget_usd=0.8)
+        self.allocate(sid)
+        with self.assertRaises(PolicyError):
+            self.allocate(sid)
+        self.ctrl.dispatch("session.pause", {"session_id": sid}, 1000)
+        self.now += 120
+        self.ctrl.watchdog_tick()
+        spent = self.status(sid)["estimated_spend_usd"]
+        self.ctrl.amend(sid, {"budget_usd": 50})
+        self.assertEqual(self.status(sid)["estimated_spend_usd"], spent)
+
+    def allow_unbounded(self):
+        self.config["limits"].update(budget_usd=None, allow_unbounded_sessions=True)
+
+    def test_unbounded_budget_requires_explicit_owner_opt_in_and_explicit_null(self):
+        with self.assertRaisesRegex(PolicyError, "owner permission"):
+            self.session(budget_usd=None)
+        self.config["limits"]["allow_unbounded_sessions"] = True
+        with self.assertRaisesRegex(PolicyError, "null account"):
+            self.session(budget_usd=None)
+        self.config["limits"].update(budget_usd=None, allow_unbounded_sessions=False)
+        with self.assertRaisesRegex(PolicyError, "owner permission"):
+            self.session(budget_usd=None)
+        self.allow_unbounded()
+        with self.assertRaisesRegex(PolicyError, "explicit session budget"):
+            self.ctrl.dispatch("session.create", {"policy": {"objective": "no missing-budget loophole"}}, 1000)
+        status = self.status(self.session(budget_usd=None))
+        self.assertIsNone(status["remaining_usd"])
+        self.assertIsNone(status["available_usd"])
+        self.assertNotIn("Infinity", json.dumps(status, allow_nan=False))
+
+    def test_unbounded_config_requires_boolean_opt_in_and_null_global_cap(self):
+        config_path = Path(self.tmp.name) / "config.json"
+        for opt_in, budget in (("true", None), (1, None), (True, 5)):
+            with self.subTest(opt_in=opt_in, budget=budget):
+                self.config["limits"].update(allow_unbounded_sessions=opt_in, budget_usd=budget)
+                config_path.write_text(json.dumps(self.config))
+                with self.assertRaises(PolicyError):
+                    load_config(config_path)
+        self.allow_unbounded()
+        config_path.write_text(json.dumps(self.config))
+        self.assertTrue(load_config(config_path)["limits"]["allow_unbounded_sessions"])
+
+    def test_unbounded_sessions_keep_reservations_and_hourly_concurrency_limits(self):
+        self.allow_unbounded()
+        sid = self.session(budget_usd=None)
+        self.allocate(sid)
+        self.assertGreater(self.status(sid)["reserved_usd"], 0)
+        self.allocate(sid)
+        with self.assertRaisesRegex(PolicyError, "capacity"):
+            self.allocate(sid)
+        other = self.session(budget_usd=None, max_hourly_usd=0.5)
+        self.ctrl.dispatch("session.pause", {"session_id": sid}, 1000)
+        self.config["limits"]["max_retained_gb"] = 60
+        with self.assertRaisesRegex(PolicyError, "hourly"):
+            self.allocate(other)
+        self.assertEqual(self.provider.creates, 2)
+
+    def test_unbounded_session_still_stops_expired_lease_after_restart(self):
+        self.allow_unbounded()
+        sid = self.session(budget_usd=None)
+        allocation = self.allocate(sid, duration_seconds=300)
+        self.ctrl.dispatch("job.record", {"session_id": sid, "allocation_id": allocation["allocation_id"],
+                           "job_id": "still-running", "status": "RUNNING"}, 1000)
+        self.now += 100_000
+        Controller(self.config, self.tmp.name, self.provider, clock=lambda: self.now).watchdog_tick()
+        status = self.status(sid)
+        self.assertEqual(status["status"], "ACTIVE")
+        self.assertEqual(status["allocations"][0]["state"], "STOPPED")
+        self.assertGreater(status["estimated_spend_usd"], 5)
+        self.assertIsNone(status["remaining_usd"])
+
+    def test_unbounded_session_keeps_lease_storage_and_deadline_admission_checks(self):
+        from datetime import datetime, timezone
+        self.allow_unbounded()
+        sid = self.session(budget_usd=None)
+        with self.assertRaisesRegex(PolicyError, "lease"):
+            self.allocate(sid, duration_seconds=3601)
+        self.config["limits"]["max_retained_gb"] = 20
+        self.allocate(sid)
+        self.ctrl.dispatch("session.pause", {"session_id": sid}, 1000)
+        self.ctrl.dispatch("session.resume", {"session_id": sid}, 1000)
+        with self.assertRaisesRegex(PolicyError, "retained storage"):
+            self.allocate(sid, container_disk_gb=10)
+        end = datetime.fromtimestamp(self.now + 200, timezone.utc).isoformat()
+        deadline_sid = self.session(budget_usd=None, deadline=end)
+        with self.assertRaisesRegex(PolicyError, "deadline"):
+            self.allocate(deadline_sid, duration_seconds=100)
+        self.now += 81
+        self.ctrl.watchdog_tick()
+        self.assertEqual(self.status(deadline_sid)["status"], "DEADLINE_REACHED")
+
+    def test_unbounded_review_reserves_stops_and_resumes_without_adding_total_cap(self):
+        self.allow_unbounded()
+        sid = self.session(budget_usd=None, review_at_usd=0.2)
+        self.allocate(sid, duration_seconds=590)
+        with self.assertRaisesRegex(PolicyError, "reservations"):
+            self.allocate(sid, duration_seconds=590)
+        self.now += 610
+        self.ctrl.watchdog_tick()
+        status = self.status(sid)
+        self.assertEqual(status["status"], "REVIEW_REQUIRED")
+        self.assertIsNone(status["remaining_usd"])
+        self.assertAlmostEqual(status["available_usd"], 0.2 - status["estimated_spend_usd"])
+        with self.assertRaisesRegex(PolicyError, "continuation instruction"):
+            self.ctrl.dispatch("session.resume", {"session_id": sid}, 1000)
+        self.ctrl.dispatch("session.resume", {"session_id": sid, "user_confirmed": True}, 1000)
+        self.assertIsNone(self.status(sid)["available_usd"])
+        self.assertIn("pod", self.allocate(sid))
+
+    def test_unbounded_owner_amendments_remain_local_and_preserve_spend(self):
+        sid = self.session(budget_usd=1)
+        with self.assertRaisesRegex(PolicyError, "owner permission"):
+            self.ctrl.amend(sid, {"budget_usd": None})
+        self.allow_unbounded()
+        self.allocate(sid)
+        with self.assertRaisesRegex(PolicyError, "confirm stopped"):
+            self.ctrl.amend(sid, {"budget_usd": None})
+        self.now += 100
+        self.ctrl.dispatch("session.pause", {"session_id": sid}, 1000)
+        spent = self.status(sid)["estimated_spend_usd"]
+        status = self.ctrl.amend(sid, {"budget_usd": None, "review_at_usd": 0.5})
+        self.assertEqual(status["estimated_spend_usd"], spent)
+        self.assertEqual(status["status"], "PAUSED")
+        self.assertIsNone(status["remaining_usd"])
+        self.assertAlmostEqual(status["available_usd"], 0.5 - spent)
+        with self.assertRaisesRegex(PolicyError, "owner allowance"):
+            self.ctrl.amend(sid, {"budget_usd": spent})
+        with self.assertRaisesRegex(PolicyError, "review threshold"):
+            self.ctrl.amend(sid, {"budget_usd": 0.1})
+        self.assertEqual(self.ctrl.amend(sid, {"budget_usd": 2})["policy"]["budget_usd"], 2)
+        with self.assertRaisesRegex(PolicyError, "unsupported"):
+            self.ctrl.dispatch("owner.amend", {"session_id": sid, "budget_usd": None}, 1000)
+
+    def test_unbounded_hook_continuation_handles_null_remaining_budget(self):
+        self.allow_unbounded()
+        sid = self.session(budget_usd=None, mode="auto", max_iterations=1)
+        binding = {"agent": "claude", "conversation_id": "uncapped-thread", "workspace": self.tmp.name}
+        self.ctrl.dispatch("session.bind", {"session_id": sid, **binding}, 1000)
+        self.assertTrue(self.ctrl.dispatch("session.continuation", binding, 1000)["continue"])
+        self.assertFalse(self.ctrl.dispatch("session.continuation", binding, 1000)["continue"])
+
     def test_ambiguous_create_reconciles_without_duplicate(self):
         sid = self.session()
         self.provider.ambiguous = True
@@ -90,6 +251,31 @@ class ControlTests(unittest.TestCase):
         self.ctrl.watchdog_tick()
         self.assertEqual(self.provider.creates, 1)
         self.assertEqual(self.status(sid)["allocations"][0]["state"], "STOPPED")
+
+    def test_renamed_pod_stop_refusal_preserves_reserved_exposure(self):
+        from research_runtime.provider import FakeProvider
+        provider = FakeProvider({"fake_state": str(Path(self.tmp.name) / "pods.json")})
+        self.ctrl.provider = provider
+        sid = self.session()
+        allocation = self.allocate(sid)
+        self.assertTrue(allocation["pod"]["name"].startswith("aniket-research-"))
+        pod_id = allocation["pod"]["id"]
+        state = json.loads(provider.path.read_text())
+        state["pods"][pod_id]["name"] = "someone-else"
+        provider.path.write_text(json.dumps(state))
+        self.ctrl.dispatch("session.pause", {"session_id": sid}, 1000)
+        self.now += 120
+        self.ctrl.watchdog_tick()
+        status = self.status(sid)
+        self.assertEqual(status["allocations"][0]["state"], "STOPPING")
+        self.assertEqual(json.loads(provider.path.read_text())["pods"][pod_id]["status"], "RUNNING")
+        with self.assertRaises(PolicyError):
+            self.ctrl.dispatch("session.resume", {"session_id": sid}, 1000)
+        with self.ctrl.locked() as db:
+            record = db.execute("SELECT rate,stopped FROM allocations WHERE id=?",
+                                (allocation["allocation_id"],)).fetchone()
+            self.assertGreater(record["rate"], 0)
+            self.assertIsNone(record["stopped"])
 
     def test_stop_failure_retains_liability_and_blocks_new_resources(self):
         sid = self.session()

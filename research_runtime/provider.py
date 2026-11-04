@@ -4,6 +4,8 @@ The controller supplies a protected configuration, never experiment code. A
 timed-out mutation is ambiguous: reconcile its intent instead of retrying it.
 """
 
+import base64
+import binascii
 import fcntl
 import json
 import math
@@ -12,6 +14,7 @@ from pathlib import Path
 import selectors
 import signal
 import stat
+import struct
 import subprocess
 import threading
 import time
@@ -19,6 +22,18 @@ import time
 
 class ProviderError(RuntimeError):
     pass
+
+
+POD_NAME_PREFIX = "aniket-"
+
+
+def _owned_name(name):
+    return isinstance(name, str) and name.startswith(POD_NAME_PREFIX)
+
+
+def _require_owned_name(name):
+    if not _owned_name(name):
+        raise ProviderError("Refusing pod access: name must start with aniket-")
 
 
 class PodNotFound(ProviderError):
@@ -39,6 +54,45 @@ class AmbiguousMutation(ProviderError):
     def __init__(self, message, pod_id=None):
         super().__init__(message)
         self.pod_id = pod_id
+
+
+def worker_public_key(config):
+    """Read an optional owner-configured OpenSSH public key, never a file/keypair."""
+    if "worker_public_key" not in config:
+        return None
+    key = config["worker_public_key"]
+    if not isinstance(key, str) or len(key) > 16384 or "\n" in key or "\r" in key:
+        raise ProviderError("worker_public_key must be one OpenSSH public key line")
+    fields = key.split(maxsplit=2)
+    allowed = {"ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521"}
+    if len(fields) < 2 or fields[0] not in allowed:
+        raise ProviderError("worker_public_key must be a supported OpenSSH public key, not a path or private key")
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+        offset = 0
+        values = []
+        while offset < len(blob):
+            length = struct.unpack_from(">I", blob, offset)[0]
+            offset += 4
+            if length <= 0 or offset + length > len(blob):
+                raise ValueError()
+            values.append(blob[offset:offset + length])
+            offset += length
+        if not values or values[0] != fields[0].encode():
+            raise ValueError()
+        if fields[0] == "ssh-ed25519":
+            valid = len(values) == 2 and len(values[1]) == 32
+        elif fields[0] == "ssh-rsa":
+            valid = len(values) == 3 and len(values[2]) >= 128
+        else:
+            curve = fields[0].removeprefix("ecdsa-sha2-")
+            size = {"nistp256": 65, "nistp384": 97, "nistp521": 133}[curve]
+            valid = len(values) == 3 and values[1] == curve.encode() and len(values[2]) == size and values[2][0] == 4
+        if not valid:
+            raise ValueError()
+    except (ValueError, struct.error, binascii.Error):
+        raise ProviderError("worker_public_key contains invalid public key data") from None
+    return key.strip()
 
 
 def _number(value, name, minimum=0):
@@ -103,19 +157,51 @@ def _api_key(config):
     return key
 
 
+def _oauth_token(config):
+    """Read a browser-authorized cache file; never enroll from a worker process."""
+    filename = config.get("oauth_token_file")
+    if not isinstance(filename, str) or not Path(filename).is_absolute():
+        raise ProviderError("OAuth requires an absolute protected oauth_token_file")
+    path = Path(filename)
+    resolved = path.resolve()
+    if resolved == Path("/workspace") or Path("/workspace") in resolved.parents:
+        raise ProviderError("OAuth credentials require protected local storage, not /workspace")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd) as handle:
+            info = os.fstat(handle.fileno())
+            if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_uid not in (0, os.geteuid()) or info.st_size > 1024 * 1024):
+                raise ValueError()
+            tokens = json.load(handle)
+        token = tokens.get("access_token")
+        if (not isinstance(token, str) or not token or any(c.isspace() for c in token)
+                or tokens.get("token_type", "Bearer").casefold() != "bearer"):
+            raise ValueError()
+        return token
+    except (OSError, ValueError, TypeError, AttributeError):
+        raise ProviderError("RunPod browser authorization is missing or invalid; run the owner OAuth login") from None
+
+
 class _StdioMCP:
     """One serialized JSON-RPC stream, with bounded reads and no shell invocation."""
 
     def __init__(self, config):
         self.timeout = _number(config.get("timeout_seconds", 45), "MCP timeout", 0.01)
-        self.key = _api_key(config)
+        self.auth = config.get("auth", "api_key")
+        if self.auth not in ("api_key", "oauth"):
+            raise ProviderError("MCP auth must be api_key or oauth")
+        self.key = _oauth_token(config) if self.auth == "oauth" else _api_key(config)
+        if self.auth == "oauth" and "command" not in config:
+            raise ProviderError("OAuth requires an owner-configured hosted MCP proxy command")
         command = config.get("command", ["npx", "-y", "@runpod/mcp-server@4.0.0"])
         if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
             raise ProviderError("MCP command must be an argv list")
         # Do not forward API-host overrides or unrelated service credentials.
         env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "SSL_CERT_FILE",
                                         "NODE_EXTRA_CA_CERTS") if k in os.environ}
-        env["RUNPOD_API_KEY"] = self.key
+        if self.auth == "api_key":
+            env["RUNPOD_API_KEY"] = self.key
         self.lock = threading.RLock()
         self.buffer = b""
         self.sequence = 0
@@ -141,6 +227,12 @@ class _StdioMCP:
         except Exception:
             self.close()
             raise
+
+    def _redact(self, value):
+        # Hosted auth failures may contain credential-bearing HTTP details.
+        if self.auth == "oauth":
+            return "Hosted RunPod MCP request failed; owner browser login may be required"
+        return str(value).replace(self.key, "[redacted]")
 
     def _send(self, payload):
         self.process.stdin.write(json.dumps(payload, allow_nan=False).encode() + b"\n")
@@ -179,11 +271,11 @@ class _StdioMCP:
                     if message.get("id") != request_id:
                         raise ProviderError("MCP response ID mismatch")
                     if "error" in message:
-                        raise ProviderError("MCP protocol error: " + json.dumps(message["error"]).replace(self.key, "[redacted]"))
+                        raise ProviderError("MCP protocol error: " + self._redact(json.dumps(message["error"])))
                     return message["result"]
             except (OSError, ValueError, KeyError, ProviderError) as exc:
                 self.close()
-                raise ProviderError(str(exc).replace(self.key, "[redacted]")) from None
+                raise ProviderError(self._redact(exc)) from None
 
     def call(self, name, arguments):
         schema = self.tools.get(name)
@@ -206,7 +298,7 @@ class _StdioMCP:
             # MCP server. Empty-body errors or prose alone do not prove absence.
             if name == "get-pod" and isinstance(payload, dict) and payload.get("status") == 404:
                 raise PodNotFound(arguments["id"])
-            detail = json.dumps(payload).replace(self.key, "[redacted]")
+            detail = self._redact(json.dumps(payload))
             status = payload.get("status") if isinstance(payload, dict) else None
             if name == "create-pod" and type(status) is int and status in {400, 401, 403, 404, 422}:
                 raise CreateRejected(f"MCP create-pod rejected: {detail[:1200]}", status)
@@ -233,6 +325,7 @@ class _StdioMCP:
 class MCPProvider:
     def __init__(self, config):
         self.config = dict(config)
+        self.worker_public_key = worker_public_key(config)
         self.client = None
 
     def _call(self, name, arguments):
@@ -240,6 +333,15 @@ class MCPProvider:
             raise ProviderError("This adapter exposes only quoting and stop/retain pod lifecycle")
         if name == "pod-action" and arguments.get("body", {}).get("action") not in ("start", "stop"):
             raise ProviderError("Only start and stop actions are permitted")
+        if name == "create-pod":
+            _require_owned_name(arguments.get("body", {}).get("name"))
+        if name == "pod-action":
+            # Read the current provider name, never a cached ledger name. Check
+            # raw metadata so missing prices cannot prevent an owned pod stop.
+            pod = self._call("get-pod", {"id": arguments["id"]})
+            if pod.get("id") != arguments["id"]:
+                raise ProviderError("Provider pod ID mismatch")
+            _require_owned_name(pod.get("name"))
         if self.client is None:
             self.client = _StdioMCP(self.config)
         try:
@@ -293,6 +395,7 @@ class MCPProvider:
                 "started_at": pod.get("startedAt"), "actions": pod.get("actions", [])}
 
     def create(self, name, request):
+        _require_owned_name(name)
         request = _request(request)
         if not request.get("image") and not request.get("template_id"):
             raise ProviderError("An approved image or template_id is required")
@@ -300,12 +403,15 @@ class MCPProvider:
                 "cloud": request["cloud"], "disk": request["container_disk_gb"],
                 "mounts": {"persistent": {"path": "/workspace", "size": request["volume_gb"]}},
                 "ports": ["22/tcp"], "startSsh": True}
+        if self.worker_public_key is not None:
+            body["env"] = {"PUBLIC_KEY": self.worker_public_key}
         for source, target in (("image", "image"), ("template_id", "templateId")):
             if request.get(source):
                 body[target] = request[source]
         pod = None
         try:
             pod = self._call("create-pod", {"body": body})
+            _require_owned_name(pod.get("name"))
             return self._normalize(pod)
         except CreateRejected:
             raise
@@ -314,7 +420,11 @@ class MCPProvider:
             raise AmbiguousMutation(f"Create requires reconciliation: {exc}", pod_id) from None
 
     def get(self, pod_id):
-        return self._normalize(self._call("get-pod", {"id": pod_id}))
+        pod = self._call("get-pod", {"id": pod_id})
+        if pod.get("id") != pod_id:
+            raise ProviderError("Provider pod ID mismatch")
+        _require_owned_name(pod.get("name"))
+        return self._normalize(pod)
 
     def list(self):
         pods, seen, seen_ids = [], set(), set()
@@ -330,6 +440,8 @@ class MCPProvider:
                 if not isinstance(pod, dict) or not pod.get("id") or pod["id"] in seen_ids:
                     raise ProviderError("Pod list has missing or duplicate IDs")
                 seen_ids.add(pod["id"])
+                if not _owned_name(pod.get("name")):
+                    continue
                 try:
                     pods.append(self._normalize(pod))
                 except ProviderError as exc:
@@ -396,6 +508,7 @@ class FakeProvider:
                 "storage_hourly_usd": storage, "quoted_at": time.time(), "rate_is_estimate": True}
 
     def create(self, name, request):
+        _require_owned_name(name)
         quote = self.quote(request)
         def create(state):
             pod_id = f"fake-{state['next_id']:06d}"
@@ -411,17 +524,20 @@ class FakeProvider:
         def get(state):
             if pod_id not in state["pods"]:
                 raise ProviderError(f"Unknown fake pod {pod_id}")
+            _require_owned_name(state["pods"][pod_id].get("name"))
             return dict(state["pods"][pod_id])
         return self._state(get)
 
     def list(self):
-        return self._state(lambda state: [dict(pod) for pod in state["pods"].values()])
+        return self._state(lambda state: [dict(pod) for pod in state["pods"].values()
+                                         if _owned_name(pod.get("name"))])
 
     def _action(self, pod_id, active):
         def change(state):
             if pod_id not in state["pods"]:
                 raise ProviderError(f"Unknown fake pod {pod_id}")
             pod = state["pods"][pod_id]
+            _require_owned_name(pod.get("name"))
             pod["status"] = "RUNNING" if active else "STOPPED"
             pod["hourly_usd"] = pod["active_hourly_usd"] if active else 0.0
             pod["actions"] = ["stop"] if active else ["start"]

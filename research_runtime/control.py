@@ -146,18 +146,33 @@ class Controller:
 
     def cutoff(self, row):
         p = json.loads(row["policy"])
-        ceiling = money(p["budget_usd"])
+        ceiling = None if p["budget_usd"] is None else money(p["budget_usd"])
         if p.get("review_at_usd") is not None and not row["review_cleared"]:
-            ceiling = min(ceiling, money(p["review_at_usd"]))
+            review = money(p["review_at_usd"])
+            ceiling = review if ceiling is None else min(ceiling, review)
         return ceiling
+
+    def validate_budget(self, policy, spent=0):
+        """Only explicit owner permission admits a JSON-null session budget."""
+        lim = self.config["limits"]
+        if "budget_usd" not in policy:
+            raise PolicyError("an explicit session budget_usd is required")
+        value = policy["budget_usd"]
+        if value is None:
+            if lim.get("allow_unbounded_sessions") is not True or lim["budget_usd"] is not None:
+                raise PolicyError("unbounded sessions require explicit owner permission and a null account budget")
+            return None
+        amount = money(value)
+        if amount <= spent or (lim["budget_usd"] is not None and amount > money(lim["budget_usd"])):
+            raise PolicyError("session budget must exceed spent and fit the owner allowance")
+        return amount
 
     def create_session(self, db, args, owner):
         p = dict(args["policy"])
         lim = self.config["limits"]
         if not str(p.get("objective", "")).strip():
             raise PolicyError("objective is required")
-        if money(p.get("budget_usd", 0)) <= 0 or money(p["budget_usd"]) > money(lim["budget_usd"]):
-            raise PolicyError("session budget must be positive and within the account allowance")
+        budget = self.validate_budget(p)
         for key in ("max_gpus", "max_pods", "max_volume_gb"):
             p.setdefault(key, lim[key])
             if positive_int(p[key], key) > lim[key]:
@@ -166,13 +181,15 @@ class Controller:
         if not 0 < money(p["max_hourly_usd"]) <= money(lim["max_hourly_usd"]):
             raise PolicyError("invalid session hourly limit")
         p.setdefault("allowed_gpu_types", lim["allowed_gpu_types"])
-        if not p["allowed_gpu_types"] or not set(p["allowed_gpu_types"]).issubset(lim["allowed_gpu_types"]):
+        if not p["allowed_gpu_types"] or ("*" not in lim["allowed_gpu_types"] and not set(p["allowed_gpu_types"]).issubset(lim["allowed_gpu_types"])):
             raise PolicyError("GPU types must be included in the owner-configured allowlist")
         end = deadline(p.get("deadline"))
         if end is not None and end <= self.clock():
             raise PolicyError("deadline is already past")
-        if p.get("review_at_usd") is not None and not 0 < money(p["review_at_usd"]) <= money(p["budget_usd"]):
-            raise PolicyError("review threshold must be positive and within budget")
+        if p.get("review_at_usd") is not None:
+            review = money(p["review_at_usd"])
+            if review <= 0 or (budget is not None and review > budget):
+                raise PolicyError("review threshold must be positive and within budget")
         mode = p.pop("mode", "interactive")
         if mode not in ("auto", "interactive"):
             raise PolicyError("mode must be auto or interactive")
@@ -200,10 +217,12 @@ class Controller:
         for j in jobs:
             j["detail"] = json.loads(j["detail"])
         retained = self.retained_gb(db, sid)
+        budget = None if p["budget_usd"] is None else money(p["budget_usd"])
+        cutoff = self.cutoff(row)
         return {"id": sid, "status": row["status"], "mode": row["mode"], "reason": row["reason"],
                 "objective": p["objective"], "policy": p, "estimated_spend_usd": dollars(spent),
-                "reserved_usd": dollars(reserved), "remaining_usd": dollars(max(0, money(p["budget_usd"]) - spent)),
-                "available_usd": dollars(max(0, self.cutoff(row) - spent - reserved)),
+                "reserved_usd": dollars(reserved), "remaining_usd": None if budget is None else dollars(max(0, budget - spent)),
+                "available_usd": None if cutoff is None else dollars(max(0, cutoff - spent - reserved)),
                 "accounting": "conservative estimate, not a provider invoice",
                 "retained_volume_gb": retained,
                 "estimated_stopped_storage_usd_month": retained * self.config.get("retention_usd_gb_month", 0.20),
@@ -233,7 +252,7 @@ class Controller:
         r.setdefault("duration_seconds", 600)
         for key in ("gpu_count", "volume_gb", "container_disk_gb", "duration_seconds"):
             positive_int(r[key], key)
-        if r["gpu_type"] not in p["allowed_gpu_types"]:
+        if "*" not in p["allowed_gpu_types"] and r["gpu_type"] not in p["allowed_gpu_types"]:
             raise PolicyError("GPU type not authorized")
         if not 10 <= r["volume_gb"] <= p["max_volume_gb"]:
             raise PolicyError("persistent volume must be at least 10 GB and within the limit")
@@ -243,9 +262,9 @@ class Controller:
             raise PolicyError("requested lease exceeds maximum; use bounded experiments")
         if bool(r.get("image")) == bool(r.get("template_id")):
             raise PolicyError("specify exactly one image or template_id")
-        if r.get("image") and r["image"] not in lim.get("allowed_images", []):
+        if r.get("image") and "*" not in lim.get("allowed_images", []) and r["image"] not in lim.get("allowed_images", []):
             raise PolicyError("image not in owner-configured allowlist")
-        if r.get("template_id") and r["template_id"] not in lim.get("allowed_templates", []):
+        if r.get("template_id") and "*" not in lim.get("allowed_templates", []) and r["template_id"] not in lim.get("allowed_templates", []):
             raise PolicyError("template not in owner-configured allowlist")
         for scope, limits in ((None, lim), (row["id"], p)):
             active = db.execute("SELECT * FROM allocations WHERE state IN ('CREATING','RUNNING','STOPPING','UNKNOWN')" +
@@ -293,10 +312,10 @@ class Controller:
         rate = money(quoted["hourly_usd"])
         if rate <= 0:
             raise PolicyError("provider did not supply a positive running rate")
-        for scope, ceiling, hourly in ((None, money(lim["budget_usd"]), money(lim["max_hourly_usd"])),
+        for scope, ceiling, hourly in ((None, None if lim["budget_usd"] is None else money(lim["budget_usd"]), money(lim["max_hourly_usd"])),
                                        (row["id"], self.cutoff(row), money(p["max_hourly_usd"]))):
             spent, reserved = self.totals(db, scope)
-            if spent + reserved + cost(rate, r["duration_seconds"] + margin) > ceiling:
+            if ceiling is not None and spent + reserved + cost(rate, r["duration_seconds"] + margin) > ceiling:
                 if reserved:
                     raise CapacityError("existing reservations occupy the remaining budget; wait for settled work")
                 raise PolicyError("experiment plus shutdown reserve exceeds remaining budget/review allowance")
@@ -307,7 +326,8 @@ class Controller:
                     raise CapacityError("existing allocations occupy the hourly allowance")
                 raise PolicyError("combined hourly rate exceeds limit")
         aid = uuid.uuid4().hex
-        name = "research-" + aid
+        from .provider import POD_NAME_PREFIX
+        name = POD_NAME_PREFIX + "research-" + aid
         db.execute("INSERT INTO allocations(id,session_id,name,pod_id,request,state,rate,started,expires) VALUES(?,?,?,?,?,?,?,?,?)",
                    (aid, row["id"], name, r.get("pod_id"), json.dumps(r), "CREATING", rate, now, expiry))
         self.event(db, row["id"], "allocation_intent", {"allocation_id": aid, "name": name, "request": r})
@@ -408,7 +428,8 @@ class Controller:
             account_spent, _ = self.totals(db)
             live = db.execute("SELECT * FROM allocations WHERE state IN ('CREATING','RUNNING','STOPPING','UNKNOWN')").fetchall()
             total_rate = sum(a["rate"] for a in live)
-            global_cutoff = account_spent + cost(total_rate, margin) >= money(self.config["limits"]["budget_usd"])
+            account_budget = self.config["limits"]["budget_usd"]
+            global_cutoff = account_budget is not None and account_spent + cost(total_rate, margin) >= money(account_budget)
             for row in db.execute("SELECT * FROM sessions").fetchall():
                 p = json.loads(row["policy"])
                 owned = [a for a in live if a["session_id"] == row["id"]]
@@ -418,7 +439,7 @@ class Controller:
                 state = row["status"]
                 reason = row["reason"]
                 if state == "ACTIVE":
-                    if global_cutoff or spent + cost(session_rate, margin) >= money(p["budget_usd"]):
+                    if global_cutoff or (p["budget_usd"] is not None and spent + cost(session_rate, margin) >= money(p["budget_usd"])):
                         state, reason = "BUDGET_REACHED", "spending cutoff, including shutdown allowance"
                     elif end is not None and now + margin >= end:
                         state, reason = "DEADLINE_REACHED", "deadline shutdown margin reached"
@@ -572,13 +593,14 @@ class Controller:
                 raise PolicyError("pause and confirm stopped pods before an owner amendment")
             policy = {**json.loads(row["policy"]), **patch}
             spent, _ = self.totals(db, sid)
-            if not spent < money(policy["budget_usd"]) <= money(self.config["limits"]["budget_usd"]):
-                raise PolicyError("amended total budget must exceed spent and fit the owner allowance")
+            budget = self.validate_budget(policy, spent)
             end = deadline(policy.get("deadline"))
             if end is not None and end <= self.clock():
                 raise PolicyError("amended deadline must be in the future")
-            if policy.get("review_at_usd") is not None and not spent < money(policy["review_at_usd"]) <= money(policy["budget_usd"]):
-                raise PolicyError("new review threshold must exceed spent and fit the total budget; use null to clear")
+            if policy.get("review_at_usd") is not None:
+                review = money(policy["review_at_usd"])
+                if review <= spent or (budget is not None and review > budget):
+                    raise PolicyError("new review threshold must exceed spent and fit the total budget; use null to clear")
             positive_int(policy["max_iterations"], "max_iterations")
             db.execute("UPDATE sessions SET policy=?,status='PAUSED',reason='owner amended policy',review_cleared=0 WHERE id=?", (json.dumps(policy), sid))
             self.event(db, sid, "owner_amendment", patch)
@@ -637,7 +659,7 @@ class Controller:
             reason = "investigation is not active autonomous work"
         elif status["policy"].get("continuation_driver", "hook") == "native":
             return {"continue": False, "reason": "native goal or schedule owns continuation", "session_id": sid}
-        elif status["remaining_usd"] <= 0:
+        elif status["remaining_usd"] is not None and status["remaining_usd"] <= 0:
             reason = "budget exhausted"
         elif deadline(status["policy"].get("deadline")) is not None and self.clock() >= deadline(status["policy"]["deadline"]):
             reason = "research deadline reached"

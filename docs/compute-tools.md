@@ -4,6 +4,39 @@ These are commands for the coding agent or the person installing the host. The
 daily human interface is the normal agent conversation described in the README.
 All tools return JSON. `research-compute --help` lists exact argument names.
 
+## Owner-managed browser authorization
+
+A controller can use RunPod's hosted MCP server after its owner authorizes it in
+RunPod's browser sign-in flow. This authenticates the protected service, separately
+from Claude's own login. The agent still uses the controller socket; do not add a
+direct RunPod connection to bypass the owner policy or independent watchdog.
+
+The owner configuration selects `provider.auth: "oauth"`, an absolute
+`provider.oauth_token_file`, and a pinned hosted proxy `provider.command`.
+The token cache must be a regular file owned by the service or root with mode
+0600 on local storage. Do not use `/workspace` for credentials on RunPod network
+volumes: their permissions may not provide isolation. The controller never
+falls back to an ambient `RUNPOD_API_KEY` when OAuth is selected, and does not
+forward unrelated credentials to the proxy.
+
+The included `research_runtime/oauth-proxy.mjs` forwards MCP to the hosted
+server using the existing cached bearer. The owner installs its pinned SDK and
+provides the proxy's executable path in the configuration. It deliberately has
+no interactive OAuth provider: failed authorization returns an error without
+opening a browser, modifying the cache, or retrying an uncertain mutation.
+The separate owner login command performs browser enrollment and validates
+visibility of the coordinator before publishing readiness. RunPod's current
+browser flow supplies a cached bearer without a refresh token or advertised
+expiry; revocation requires another owner browser login. Neither Claude nor a
+worker receives that credential. Independent watchdog processes keep using it
+while Claude is disconnected; authentication loss cannot certify a worker stopped.
+
+The attention-potts deployment uses `mcp-remote@0.15.2` only for owner enrollment
+and `@modelcontextprotocol/sdk@1.32.2` for the read-only-authentication proxy.
+Its encrypted backups use a separate protected recovery key, retained privately
+on the owner's Mac, so browser authorization does not require a manually created
+API key and does not determine the backup encryption key.
+
 ## A policy and a bounded experiment
 
 First run `research-compute doctor` to inspect configured hardware/images, the
@@ -29,6 +62,31 @@ the returned ID throughout that investigation. Set `mode` to `auto` for requeste
 autonomy; an optional `deadline` must be an actual ISO timestamp with timezone,
 for example an explicitly resolved 17:00 in the user's timezone. Don't invent a
 new budget when a job retries or a conversation resumes.
+
+An explicitly uncapped investigation uses `"budget_usd": null`, never an omitted
+budget or an infinity value. The protected owner configuration must independently
+set `limits.budget_usd` to `null` and `limits.allow_unbounded_sessions` to `true`;
+the default remains finite session budgets. This opt-in removes only the
+cumulative dollar ceiling. Hourly rate, concurrent GPU/pod counts, retained
+storage, per-worker lease duration, optional deadline/review, and watchdog
+admission checks still apply. `remaining_usd` is JSON `null` for an uncapped
+session, and `available_usd` is also `null` unless an uncleared review threshold
+provides a finite cutoff. Reservations and estimated spending remain recorded.
+The agent cannot amend an existing session's budget through the socket: changing
+a finite session to uncapped requires a local owner amendment after confirmed
+worker shutdown. A session with a finite budget keeps that budget even when
+the account configuration permits uncapped sessions.
+
+On a private coordinator, the owner can configure a dedicated worker key as
+`provider.worker_public_key`, containing one literal OpenSSH public key line
+(for example `ssh-ed25519 AAAA... worker`). The controller injects it as the new
+worker's `PUBLIC_KEY` environment variable during pod creation, without changing
+account-wide SSH keys. Paths, private keys, malformed keys, and multiple lines
+are rejected before allocation. Keep the corresponding private key in the
+agent's private SSH directory and select it using the run specification's
+`ssh_key` field. Use a different key from the coordinator's root login key.
+Existing stopped workers retain their original keys; this setting changes new
+worker creation only. The provider setting is not an agent allocation field.
 
 Bind using the exact native conversation/workspace context injected by the
 installed hook or Pi extension:

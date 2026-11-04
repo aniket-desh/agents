@@ -45,6 +45,18 @@ class InstallTests(unittest.TestCase):
     def install(self):
         return installer.install(self.source, self.home, ["codex", "claude", "pi"])
 
+    def test_oauth_proxy_is_packaged_for_both_client_and_protected_controller(self):
+        proxy = self.source / "research_runtime/oauth-proxy.mjs"
+        proxy.write_text("// protected OAuth transport fixture\n")
+        self.install()
+        installed = self.home / ".local/share/research-agents/research_runtime/oauth-proxy.mjs"
+        self.assertEqual(installed.read_bytes(), proxy.read_bytes())
+        stage = self.base / "controller-stage"
+        config = self.base / "owner-config.json"
+        config.write_text('{"provider":{"kind":"fake"}}')
+        installer.stage_controller(self.source, stage, config)
+        self.assertEqual((stage / "opt/research-agents/research_runtime/oauth-proxy.mjs").read_bytes(), proxy.read_bytes())
+
     def test_update_preserves_personal_instructions_and_command_works(self):
         documents = [self.home / document for document, _ in installer.AGENTS.values()]
         personal = "# Personal writing conventions\nPreserve my exact words.\n"

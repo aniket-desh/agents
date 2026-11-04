@@ -6,6 +6,15 @@ integrations. A separate controller rents RunPod GPUs within shared limits,
 collects small results, and **stops pods while retaining their volumes**.
 It never terminates them. There is no `gpuc` dependency.
 
+New pods are named `aniket-research-<allocation ID>`. Both live and fake providers
+exclude pods without the exact `aniket-` prefix and verify the current provider
+name before starting or stopping a pod. Worker access also requires the prefix;
+reuse additionally requires ownership in the controller ledger. Existing pods
+without the prefix are refused, including old `research-` pods: manage those
+manually. The prefix is a controller rule, not a RunPod API-key permission, and
+direct account tools can bypass it. A concurrent external rename between the
+name check and mutation cannot be prevented by this client-side check.
+
 Install this repo once on your persistent host and build its isolated workspace
 image. Inside that workspace, plain `codex` defaults to approval-free,
 unsandboxed execution and plain `claude` adds `--dangerously-skip-permissions`.
@@ -199,6 +208,13 @@ actual RunPod account. The repository tests use fake providers; they are not
 evidence of a successful live GPU deployment.
 
 ## What the limits mean
+
+Setting owner `limits.budget_usd` to `null` explicitly removes the cumulative
+account cap; every investigation still requires a positive, independently
+authorized session budget, and its reservations, spending, and review gates
+remain enforced. Reuse that session when continuing the same investigation.
+An explicit `"*"` in a GPU/image/template allowlist admits any catalog choice;
+finite allowlists remain restrictive by default.
 
 The protected owner allowance is cumulative across this controller's ledger,
 including previous investigations. It isn't reset by a new conversation or a

@@ -7,11 +7,12 @@ import signal
 import socket
 import socketserver
 import struct
+import sys
 import threading
 import time
 
 from .control import Controller, PolicyError, CapacityError, money, positive_int
-from .provider import make_provider
+from .provider import make_provider, worker_public_key
 
 
 def load_config(path):
@@ -19,7 +20,13 @@ def load_config(path):
     if config.get("provider", {}).get("kind") not in ("fake", "mcp"):
         raise PolicyError("provider.kind must be fake or mcp")
     limits = config["limits"]
+    if "allow_unbounded_sessions" in limits and type(limits["allow_unbounded_sessions"]) is not bool:
+        raise PolicyError("allow_unbounded_sessions must be an explicit boolean")
+    if limits.get("allow_unbounded_sessions") and limits["budget_usd"] is not None:
+        raise PolicyError("unbounded sessions require a null account budget")
     for key in ("budget_usd", "max_hourly_usd"):
+        if key == "budget_usd" and limits[key] is None:
+            continue  # Explicit opt-in to independently authorized session budgets.
         if money(limits[key]) <= 0:
             raise PolicyError(f"{key} must be positive")
     for key in ("max_gpus", "max_pods", "max_retained_gb", "max_volume_gb"):
@@ -28,6 +35,15 @@ def load_config(path):
         raise PolicyError("configure allowed GPU types explicitly")
     if not limits.get("allowed_images") and not limits.get("allowed_templates"):
         raise PolicyError("configure an image or template allowlist explicitly")
+    provider = config["provider"]
+    if provider.get("auth", "api_key") not in ("api_key", "oauth"):
+        raise PolicyError("provider.auth must be api_key or oauth")
+    if provider.get("auth") == "oauth":
+        if not isinstance(provider.get("oauth_token_file"), str) or not Path(provider["oauth_token_file"]).is_absolute():
+            raise PolicyError("OAuth requires an absolute protected oauth_token_file")
+        if not provider.get("command"):
+            raise PolicyError("OAuth requires an owner-configured hosted proxy command")
+    worker_public_key(provider)
     for key, value in config.get("safety", {}).items():
         if key in ("poll_seconds", "shutdown_margin_seconds", "max_lease_seconds", "idle_grace_seconds", "checkpoint_grace_seconds"):
             positive_int(value, key)
@@ -39,9 +55,14 @@ def peer_uid(sock):
         return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
     if hasattr(sock, "getpeereid"):
         return sock.getpeereid()[0]
-    # Development on macOS: only the socket owner's identity is supported.
-    # Protected multi-user deployment is Linux and uses SO_PEERCRED above.
-    return os.getuid()
+    if sys.platform == "darwin":
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        uid, gid = ctypes.c_uint(), ctypes.c_uint()
+        if libc.getpeereid(sock.fileno(), ctypes.byref(uid), ctypes.byref(gid)) != 0:
+            raise OSError(ctypes.get_errno(), "Cannot authenticate socket peer")
+        return uid.value
+    raise PolicyError("Platform cannot authenticate Unix-socket clients")
 
 
 class Server(socketserver.ThreadingUnixStreamServer):
@@ -57,7 +78,11 @@ class Handler(socketserver.StreamRequestHandler):
             if len(raw) > 1_048_576:
                 raise PolicyError("request too large")
             request = json.loads(raw)
-            result = self.server.controller.dispatch(request["method"], request.get("args", {}), peer_uid(self.connection))
+            owner = peer_uid(self.connection)
+            allowed = self.server.controller.config.get("client_uids")
+            if allowed is not None and owner not in allowed:
+                raise PolicyError("Client UID is not authorized for this controller")
+            result = self.server.controller.dispatch(request["method"], request.get("args", {}), owner)
             reply = {"ok": True, "result": result}
         except CapacityError as exc:
             reply = {"ok": False, "error": str(exc), "retryable": True}
@@ -117,7 +142,8 @@ def watchdog(config_path, state_dir, once=False):
 
 
 def call(method, args=None, socket_path=None):
-    path = socket_path or os.environ.get("RESEARCH_COMPUTE_SOCKET", "/run/research-compute/control.sock")
+    default = "/var/run/research-compute/control.sock" if sys.platform == "darwin" else "/run/research-compute/control.sock"
+    path = socket_path or os.environ.get("RESEARCH_COMPUTE_SOCKET", default)
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(120)
         sock.connect(path)
